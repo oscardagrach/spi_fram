@@ -95,7 +95,7 @@ int write_byte(uint16_t addr, uint8_t data)
 		printf("[-] Bad write, data not match! %x %x\n", buf[3], data);
 		return 1;
 	}
-	printf("[+] WRITE OKAY!\n");
+	printf("\n[+] WRITE OKAY!\n");
 	return 0;
 }
 
@@ -181,11 +181,11 @@ int initialize_fram(void)
 	bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 	bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
 	
+	printf("Detecting chip...\n");
 	buf[0] = RDID;
 	bcm2835_spi_transfern(buf, 5);
-	
-	printf("Manufacturer ID: %02x%02x Product ID: %02x%02x\n", buf[1], buf[2], buf[3], buf[4]);
-	
+	printf("[*] Manufacturer ID: %02x%02x Product ID: %02x%02x\n", buf[1], buf[2], buf[3], buf[4]);
+	printf("-------------------------------------------\n\n");
 	return 0;
 }
 
