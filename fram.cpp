@@ -30,7 +30,6 @@ int write_enable(void)
 {
         char buf = WREN;        
         bcm2835_spi_transfer(buf);
-	//printf("[*] Write enabled!\n");
         return 0;
 }
 
@@ -38,7 +37,6 @@ int write_disable(void)
 {
         char buf = WRDI;
         bcm2835_spi_transfer(buf);
-        //printf("\n[*] Write disabled!\n");
         return 0;
 }
 
@@ -59,6 +57,7 @@ int read_byte(uint16_t addr)
 	bcm2835_spi_transfern(buf, 4);
 
 	printf("Data: %02x\n", buf[3]);
+	printf("[+] READ OKAY!\n");
 	return 0;
 }
 	
@@ -73,7 +72,7 @@ int write_byte(uint16_t addr, uint8_t data)
 	}
 	
 	write_enable();
-	printf("Writing %02x to %04x\n", data, addr);
+	printf("Writing %02x to 0x%04x\n", data, addr);
 	
 	buf[0] = WRITE;
 	buf[1] = addr >> 8;
@@ -103,7 +102,7 @@ int dump_bytes(uint16_t addr, uint16_t len)
 {
 	char buf[4] = {0};
 	char data[len] = {0};
-	uint16_t count = 0;	
+	uint16_t count = 0;
 
 	if (addr > 0x2000)
 	{
@@ -132,7 +131,8 @@ int dump_bytes(uint16_t addr, uint16_t len)
 		fflush(stdout);
 	} while (count < len);
 	
-	PRINT_DATA("\n[+] Dumping...\n", data, len);
+	PRINT_DATA("\nDumping...\n", data, len);
+	printf("[+] DUMP OKAY!\n");
 	return 0;
 }
 
@@ -156,6 +156,127 @@ int erase_all(void)
 		printf("\rErasing bytes: %d", addr);
 	} while (addr < 0x2000);
 	printf("\n[+] ERASE OKAY!\n");
+	return 0;
+}
+
+int write_image(uint16_t addr, const char *file)
+{
+	FILE *inf;
+	int i;
+	long size;
+	char buf[4] = {0};
+	uint16_t count = 0;
+	uint8_t * data;
+	size_t result;
+	
+	inf = fopen(file, "rb");
+	if (!inf)
+	{
+		printf("[-] Error opening file!\n");
+		return 1;
+	}
+	
+	fseek(inf, 0, SEEK_END);
+	size = ftell(inf);
+	rewind(inf);
+	
+	if (size < 0x2000)
+	{
+		printf("[-] File too large!\n");
+		return 1;
+	}
+	if ((addr+size) > 0x2000)
+	{
+		printf("[-] Not enough storage for write!\n");
+		return 1;
+	}
+	
+	data = (uint8_t*) malloc(sizeof(uint8_t)*size);
+	if (!buf)
+	{
+		printf("[-] Failed to allocate buffer\n");
+		return 1;
+	}
+	
+	result = fread(data, 1, size, inf);
+	
+	if (result != size)
+	{
+		printf("[-] Read file error!\n");
+		return 1;
+	}
+	
+	fclose(inf);
+	printf("Writing %d bytes from %s...\n", size, file);
+	
+	do {
+		write_enable();
+		buf[0] = WRITE;
+		buf[1] = addr >> 8;
+		buf[2] = addr;
+		buf[3] = data[count];
+		bcm2835_spi_transfern(buf, 4);
+		write_disable();
+
+		count++;
+		addr++;
+		printf("\rWriting bytes: %d", count);
+		fflush(stdout);
+	} while (count < size);
+	printf("\n[+] WRITE IMAGE OKAY!\n");
+	return 0;
+}
+
+int read_image(uint16_t addr, uint16_t len, const char *file)
+{
+	FILE *outf;
+	char buf[4] = {0};
+	uint8_t * data;
+	uint16_t count = 0;
+	
+	if (len > (0x2000 - addr))
+	{
+		printf("[-] Size is too large!\n");
+		return 1;
+	}
+	
+	data = (uint8_t*) malloc(sizeof(uint8_t)*len);
+	if (!data)
+	{
+		printf("[-] Error allocating memory!\n");
+		return 1;
+	}
+	
+	printf("Reading %d bytes to %s...\n", len, file);
+	
+	do {
+		buf[0] = READ;
+		buf[1] = addr >> 8;
+		buf[2] = addr;
+		buf[3] = 0x00;
+		bcm2835_spi_transfern(buf, 4);
+		data[count] = buf[3];
+		addr++;
+		count++;
+		printf("\rBytes read: %d", count);
+		fflush(stdout);
+	} while (count < len);
+
+	outf = fopen(file, "wb");
+	if (!outf)
+	{
+		printf("\n[-] Failed to open file %s\n", file);
+		return 1;
+	}
+	if (!fwrite(data, 1, len, outf))
+	{
+		printf("\n[-] Failed to write file %s\n", file);
+		fclose(outf);
+		return 1;
+	}
+	fsync(fileno(outf));
+	fclose(outf);
+	printf("\n[+] READ IMAGE OKAY!\n");
 	return 0;
 }
 
@@ -191,6 +312,7 @@ int initialize_fram(void)
 
 int main(int argc, char **argv)
 {
+	const char file[200] = {0};
 	char data;
 	uint16_t addr;
 	uint16_t len;
@@ -216,10 +338,8 @@ int main(int argc, char **argv)
 		}
 		sscanf(argv[2], "%x", &addr);
 		read_byte(addr);
-		printf("[+] Okay!\n");
 		return 0;
 	}
-	
 	if (strcmp("write", argv[1]) == 0)
 	{
 		if (argv[2] == NULL)
@@ -236,8 +356,8 @@ int main(int argc, char **argv)
 		sscanf(argv[3], "%x", &data);
 	
 		write_byte(addr, data);
+		return 0;
 	}
-	
 	if (strcmp("dump", argv[1]) == 0)
 	{
 		if (argv[2] == NULL)
@@ -254,11 +374,54 @@ int main(int argc, char **argv)
 		sscanf(argv[3], "%x", &len);
 	
 		dump_bytes(addr, len);
+		return 0;
 	}
 	if (strcmp("erase_all", argv[1]) == 0)
 	{
 		erase_all();
+		return 0;
 	}
+	if (strcmp("read_image", argv[1]) == 0)
+	{
+		if (argv[2] == NULL)
+		{
+			printf("Need address for read!\n");
+			return 1;
+		}
+		if (argv[3] == NULL)
+		{
+			printf("Need len for read!\n");
+			return 1;
+		}
+		if  (argv[4] == NULL)
+		{
+			printf("Need file for read!\n");
+			return 1;
+		}
+		sscanf(argv[2], "%x", &addr);
+		sscanf(argv[3], "%x", &len);
+		sscanf(argv[4], "%s", file);
 
+		read_image(addr, len, file);
+		return 0;
+	}
+	if (strcmp("write_image", argv[1]) == 0)
+	{
+		if (argv[2] == NULL)
+		{
+			printf("[-] Need address for write!\n");
+			return 1;
+		}
+		if (argv[3] == NULL) {
+			printf("[-] Need file to write!\n");
+			return 1;
+		}
+	
+		sscanf(argv[2], "%x", &addr);
+		sscanf(argv[3], "%s", file);
+		write_image(addr, file);
+		return 0;
+	}
+	printf("[-] Unrecognized command!\n");
 	return 0;
 }
