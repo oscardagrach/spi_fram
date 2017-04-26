@@ -1,11 +1,10 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
-#include <iostream>
 #include <errno.h>
 #include <bcm2835.h>
-#include <unistd.h>
 
 #define WREN	0x06 // Set Write Enable Latch
 #define WRDI	0x04 // Reset Write Enable Latch
@@ -26,29 +25,62 @@ printf("%s\n", a); \
    } \
    printf("\n");
 
-int write_enable(void)
-{
-        char buf = WREN;        
-        bcm2835_spi_transfer(buf);
-        return 0;
+void write_enable(void)
+{       
+        bcm2835_spi_transfer((uint8_t)WREN);
 }
 
-int write_disable(void)
+void write_disable(void)
 {
-        char buf = WRDI;
-        bcm2835_spi_transfer(buf);
-        return 0;
+        bcm2835_spi_transfer((uint8_t)WRDI);
 }
+
+int check_boundary(uint8_t type, uint16_t addr, uint16_t len)
+{
+	switch(type)
+	{
+		case 1:
+			if (addr > 0x2000)
+			{
+				printf("[-] Address out of bounds\n");
+				return 1;
+			}
+			break;
+		case 2:
+			if (addr+len > 0x2000)
+			{
+				printf("[-] Data out of bounds\n");
+				return 1;
+			}
+			break;
+		case 3:
+			if (addr > 0x2000)
+			{
+				printf("[-] Address out of bounds\n");
+				return 1;
+			}
+			if (addr+len > 0x2000)
+			{
+				printf("[-] Data out of bounds\n");
+				return 1;
+			}
+			break;
+		default:
+			return 0;
+	}
+	return 0;
+}
+
 
 int read_byte(uint16_t addr)
 {
+	int err;
 	char buf[4];
-	if (addr > 0x2000)
-	{
-		printf("[-] Address out of bounds\n");
-		return 1;
-	}
-	printf("Reading from 0x%04x\n", addr);
+	
+	err = check_boundary(1, addr, 0);
+	if (err) return 1;
+
+	printf("Reading from 0x%04hX\n", addr);
 
 	buf[0] = READ;
 	buf[1] = addr >> 8;
@@ -56,23 +88,21 @@ int read_byte(uint16_t addr)
 	buf[3] = 0x00;
 	bcm2835_spi_transfern(buf, 4);
 
-	printf("Data: %02x\n", buf[3]);
+	printf("Data: %02hhX\n\n", buf[3]);
 	printf("[+] READ OKAY!\n");
 	return 0;
 }
 	
 int write_byte(uint16_t addr, uint8_t data)
 {
+	int err;
 	char buf[4] = {0};
 	
-	if (addr > 0x2000)
-	{
-		printf("[-] Address out of bounds!\n");
-		return 1;
-	}
+	err = check_boundary(1, addr, 0);
+	if (err) return 1;
 	
 	write_enable();
-	printf("Writing %02x to 0x%04x\n", data, addr);
+	printf("Writing 0x%02hhX to 0x%04hX\n", data, addr);
 	
 	buf[0] = WRITE;
 	buf[1] = addr >> 8;
@@ -91,7 +121,7 @@ int write_byte(uint16_t addr, uint8_t data)
 	
 	if (buf[3] != data)
 	{
-		printf("[-] Bad write, data not match! %x %x\n", buf[3], data);
+		printf("[-] Bad write, data not match! %hhX %hhXx\n", buf[3], data);
 		return 1;
 	}
 	printf("\n[+] WRITE OKAY!\n");
@@ -100,22 +130,22 @@ int write_byte(uint16_t addr, uint8_t data)
 
 int dump_bytes(uint16_t addr, uint16_t len)
 {
+	int err;
 	char buf[4] = {0};
-	char data[len] = {0};
+	uint8_t * data;
 	uint16_t count = 0;
 
-	if (addr > 0x2000)
-	{
-		printf("[-] Address out of bounds!\n");
-		return 1;
-	}
-	if ((addr+len) > 0x2000)
-	{
-		printf("[-] Data out of bounds!\n");
-		return 1;
-	}
+	err = check_boundary(3, addr, len);
+	if (err) return 1;
 	
-	printf("Dumping %d bytes from 0x%04x\n", len, addr);
+	data = (uint8_t*) malloc(sizeof(uint8_t)*len);
+	if (!data)
+	{
+		printf("Error allocating buffer!\n");
+		return 1;
+	}
+
+	printf("Dumping %d bytes from 0x%hX\n", len, addr);
 	
 	do {
 		buf[0] = READ;
@@ -162,12 +192,12 @@ int erase_all(void)
 int write_image(uint16_t addr, const char *file)
 {
 	FILE *inf;
-	int i;
-	long size;
+	int err;
 	char buf[4] = {0};
+	uint16_t size;
 	uint16_t count = 0;
 	uint8_t * data;
-	size_t result;
+	uint16_t result;
 	
 	inf = fopen(file, "rb");
 	if (!inf)
@@ -180,19 +210,11 @@ int write_image(uint16_t addr, const char *file)
 	size = ftell(inf);
 	rewind(inf);
 	
-	if (size < 0x2000)
-	{
-		printf("[-] File too large!\n");
-		return 1;
-	}
-	if ((addr+size) > 0x2000)
-	{
-		printf("[-] Not enough storage for write!\n");
-		return 1;
-	}
+	err = check_boundary(3, addr, size);
+	if (err) return 1;
 	
 	data = (uint8_t*) malloc(sizeof(uint8_t)*size);
-	if (!buf)
+	if (!data)
 	{
 		printf("[-] Failed to allocate buffer\n");
 		return 1;
@@ -230,16 +252,14 @@ int write_image(uint16_t addr, const char *file)
 int read_image(uint16_t addr, uint16_t len, const char *file)
 {
 	FILE *outf;
+	int err;
 	char buf[4] = {0};
 	uint8_t * data;
 	uint16_t count = 0;
 	
-	if (len > (0x2000 - addr))
-	{
-		printf("[-] Size is too large!\n");
-		return 1;
-	}
-	
+	err = check_boundary(3, addr, len);
+	if (err) return 1;
+
 	data = (uint8_t*) malloc(sizeof(uint8_t)*len);
 	if (!data)
 	{
@@ -302,9 +322,10 @@ int initialize_fram(void)
 	bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 	bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
 	
-	printf("Detecting chip...\n");
+	printf("\nDetecting chip...\n");
 	buf[0] = RDID;
 	bcm2835_spi_transfern(buf, 5);
+	printf("\n-------------------------------------------\n");
 	printf("[*] Manufacturer ID: %02x%02x Product ID: %02x%02x\n", buf[1], buf[2], buf[3], buf[4]);
 	printf("-------------------------------------------\n\n");
 	return 0;
@@ -312,7 +333,7 @@ int initialize_fram(void)
 
 int main(int argc, char **argv)
 {
-	const char file[200] = {0};
+	char file[200] = {0};
 	char data;
 	uint16_t addr;
 	uint16_t len;
@@ -323,6 +344,9 @@ int main(int argc, char **argv)
 		printf("----------------\n");
 		printf("read [16-bit addr]\n");
 		printf("write [16-bit addr] [data]\n");
+		printf("erase_all\n");
+		printf("read_image [16-bit addr] [len] [file]\n");
+		printf("write_image [16-bit addr] [file]\n");
 		printf("\n");
 		return 0;
 	}
@@ -331,47 +355,36 @@ int main(int argc, char **argv)
 	
 	if (strcmp("read", argv[1]) == 0)
 	{
-		if (argv[2] == NULL)
+		if (argc != 3)
 		{
-			addr = 0x0000;
-			read_byte(addr);
+			printf("Wrong args!\n");
+			return 1;
 		}
-		sscanf(argv[2], "%x", &addr);
+		sscanf(argv[2], "%hx", &addr);
 		read_byte(addr);
 		return 0;
 	}
 	if (strcmp("write", argv[1]) == 0)
 	{
-		if (argv[2] == NULL)
+		if (argc != 4)
 		{
-			printf("[-] Need address for write!\n");
+			printf("Wrong args!\n");
 			return 1;
 		}
-		if (argv[3] == NULL)
-		{
-			printf("[-] Need data for write!\n");
-			return 1;
-		}
-		sscanf(argv[2], "%x", &addr);
-		sscanf(argv[3], "%x", &data);
+		sscanf(argv[2], "%hx", &addr);
+		sscanf(argv[3], "%hhx", &data);
 	
 		write_byte(addr, data);
 		return 0;
 	}
 	if (strcmp("dump", argv[1]) == 0)
 	{
-		if (argv[2] == NULL)
+		if (argc != 4)
 		{
-			printf("[-] Need address for dump!\n");
-			return 1;
+			printf("Wrong args!\n");
 		}
-		if (argv[3] == NULL)
-		{
-			printf("[-] Need length for dump!\n");
-			return 1;
-		}
-		sscanf(argv[2], "%x", &addr);
-		sscanf(argv[3], "%x", &len);
+		sscanf(argv[2], "%hx", &addr);
+		sscanf(argv[3], "%hx", &len);
 	
 		dump_bytes(addr, len);
 		return 0;
@@ -383,23 +396,13 @@ int main(int argc, char **argv)
 	}
 	if (strcmp("read_image", argv[1]) == 0)
 	{
-		if (argv[2] == NULL)
+		if (argc != 5)
 		{
-			printf("Need address for read!\n");
+			printf("Wrong args\n");
 			return 1;
 		}
-		if (argv[3] == NULL)
-		{
-			printf("Need len for read!\n");
-			return 1;
-		}
-		if  (argv[4] == NULL)
-		{
-			printf("Need file for read!\n");
-			return 1;
-		}
-		sscanf(argv[2], "%x", &addr);
-		sscanf(argv[3], "%x", &len);
+		sscanf(argv[2], "%hx", &addr);
+		sscanf(argv[3], "%hx", &len);
 		sscanf(argv[4], "%s", file);
 
 		read_image(addr, len, file);
@@ -407,17 +410,12 @@ int main(int argc, char **argv)
 	}
 	if (strcmp("write_image", argv[1]) == 0)
 	{
-		if (argv[2] == NULL)
+		if (argc != 4)
 		{
-			printf("[-] Need address for write!\n");
-			return 1;
+			printf("Wrong args!\n");
 		}
-		if (argv[3] == NULL) {
-			printf("[-] Need file to write!\n");
-			return 1;
-		}
-	
-		sscanf(argv[2], "%x", &addr);
+
+		sscanf(argv[2], "%hx", &addr);
 		sscanf(argv[3], "%s", file);
 		write_image(addr, file);
 		return 0;
@@ -425,3 +423,4 @@ int main(int argc, char **argv)
 	printf("[-] Unrecognized command!\n");
 	return 0;
 }
+
