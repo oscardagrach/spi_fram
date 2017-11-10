@@ -6,13 +6,7 @@
 #include <errno.h>
 #include <bcm2835.h>
 
-#define WREN	0x06 // Set Write Enable Latch
-#define WRDI	0x04 // Reset Write Enable Latch
-#define RDSR	0x05 // Read Status Register
-#define WRSR	0x01 // Write Status Register
-#define READ	0x03 // Read Memory Code
-#define WRITE	0x02 // Write Memory Code
-#define RDID	0x9F // Read Device ID
+#include "spi_fram.h"
 
 #define PRINT_DATA(a, b, c) \
 if(a) { \
@@ -35,25 +29,35 @@ void write_disable(void)
         bcm2835_spi_transfer((uint8_t)WRDI);
 }
 
+int spi_ready(void)
+{
+	if (spi_init == 1)
+	{
+		return 0;
+	}
+	
+	return -1;
+}
+
 int check_boundary(uint8_t type, uint16_t addr, uint16_t len)
 {
 	switch(type)
 	{
-		case 1:
+		case ADDR_CHECK:
 			if (addr > 0x2000)
 			{
 				printf("[-] Address out of bounds\n");
 				return 1;
 			}
 			break;
-		case 2:
+		case DATA_CHECK:
 			if (addr+len > 0x2000)
 			{
 				printf("[-] Data out of bounds\n");
 				return 1;
 			}
 			break;
-		case 3:
+		case BOTH_CHECK:
 			if (addr > 0x2000)
 			{
 				printf("[-] Address out of bounds\n");
@@ -66,7 +70,7 @@ int check_boundary(uint8_t type, uint16_t addr, uint16_t len)
 			}
 			break;
 		default:
-			return 0;
+			return -1;
 	}
 	return 0;
 }
@@ -76,8 +80,15 @@ int read_byte(uint16_t addr)
 {
 	int err;
 	char buf[4];
+
+	err = spi_ready();
+	if (err)
+	{
+		printf("SPI/FRAM is not initialized\n");
+		return -1;
+	}
 	
-	err = check_boundary(1, addr, 0);
+	err = check_boundary(ADDR_CHECK, addr, 0);
 	if (err) return 1;
 
 	printf("Reading from 0x%04hX\n", addr);
@@ -97,8 +108,15 @@ int write_byte(uint16_t addr, uint8_t data)
 {
 	int err;
 	char buf[4] = {0};
-	
-	err = check_boundary(1, addr, 0);
+
+	err = spi_ready();
+	if (err)
+	{
+		printf("SPI/FRAM is not initialized\n");
+		return -1;
+	}
+
+	err = check_boundary(ADDR_CHECK, addr, 0);
 	if (err) return 1;
 	
 	write_enable();
@@ -135,7 +153,14 @@ int dump_bytes(uint16_t addr, uint16_t len)
 	uint8_t * data;
 	uint16_t count = 0;
 
-	err = check_boundary(3, addr, len);
+	err = spi_ready();
+	if (err)
+	{
+		printf("SPI/FRAM is not initialized\n");
+		return -1;
+	}
+
+	err = check_boundary(BOTH_CHECK, addr, len);
 	if (err) return 1;
 	
 	data = (uint8_t*) malloc(sizeof(uint8_t)*len);
@@ -168,8 +193,16 @@ int dump_bytes(uint16_t addr, uint16_t len)
 
 int erase_all(void)
 {
+	int err = 0;
 	char buf[4];
 	uint16_t addr = 0;
+
+	err = spi_ready();
+	if (err)
+	{
+		printf("SPI/FRAM is not initialized\n");
+		return -1;
+	}
 	
 	printf("Erasing chip...\n");
 
@@ -192,12 +225,19 @@ int erase_all(void)
 int write_image(uint16_t addr, const char *file)
 {
 	FILE *inf;
-	int err;
+	int err = 0;
 	char buf[4] = {0};
 	uint16_t size;
 	uint16_t count = 0;
 	uint8_t * data;
 	uint16_t result;
+
+	err = spi_ready();
+	if (err)
+	{
+		printf("SPI/FRAM is not initialized\n");
+		return -1;
+	}
 	
 	inf = fopen(file, "rb");
 	if (!inf)
@@ -210,7 +250,7 @@ int write_image(uint16_t addr, const char *file)
 	size = ftell(inf);
 	rewind(inf);
 	
-	err = check_boundary(3, addr, size);
+	err = check_boundary(BOTH_CHECK, addr, size);
 	if (err) return 1;
 	
 	data = (uint8_t*) malloc(sizeof(uint8_t)*size);
@@ -256,8 +296,15 @@ int read_image(uint16_t addr, uint16_t len, const char *file)
 	char buf[4] = {0};
 	uint8_t * data;
 	uint16_t count = 0;
+
+	err = spi_ready();
+	if (err)
+	{
+		printf("SPI/FRAM is not initialized\n");
+		return -1;
+	}
 	
-	err = check_boundary(3, addr, len);
+	err = check_boundary(BOTH_CHECK, addr, len);
 	if (err) return 1;
 
 	data = (uint8_t*) malloc(sizeof(uint8_t)*len);
@@ -328,6 +375,12 @@ int initialize_fram(void)
 	printf("\n-------------------------------------------\n");
 	printf("[*] Manufacturer ID: %02x%02x Product ID: %02x%02x\n", buf[1], buf[2], buf[3], buf[4]);
 	printf("-------------------------------------------\n\n");
+	
+	if (buf[1] == 0x04)
+	{
+		spi_init = 1;
+	}
+
 	return 0;
 }
 
@@ -342,11 +395,11 @@ int main(int argc, char **argv)
 	{
 		printf("\nSPI FRAM Utility\n");
 		printf("----------------\n");
-		printf("read [16-bit addr]\n");
-		printf("write [16-bit addr] [data]\n");
+		printf("read: [16-bit addr]\n");
+		printf("write: [16-bit addr] [data]\n");
 		printf("erase_all\n");
-		printf("read_image [16-bit addr] [len] [file]\n");
-		printf("write_image [16-bit addr] [file]\n");
+		printf("read_image: [16-bit addr] [len] [file]\n");
+		printf("write_image: [16-bit addr] [file]\n");
 		printf("\n");
 		return 0;
 	}
