@@ -1,9 +1,9 @@
-CC = g++
+CC = gcc
 INCLUDES = -I ./
 
 all:
-	$(CC) $(INCLUDES) fram.cpp -lbcm2835 -o fram
+	$(CC) $(INCLUDES) spi_fram.c -lbcm2835 -o spi_fram
 
 clean:
-	rm fram
+	rm spi_fram
 
